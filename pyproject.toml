@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eutils2datasets"
+version = "0.1.0"
+description = "Explains NCBI Datasets API v2 equivalents of EUtils/EDirect requests and plain-language questions"
+requires-python = ">=3.8"
+
+[tool.setuptools.packages.find]
+include = ["eutils2datasets*"]

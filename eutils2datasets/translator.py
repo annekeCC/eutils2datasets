@@ -195,8 +195,14 @@ def _link_seq_to_gene(req: ParsedRequest) -> TranslationResult:
 
 
 def _link_gene_to_seq(req: ParsedRequest) -> TranslationResult:
-    """gene -> nuccore/protein: the gene product report lists every
-    transcript/protein accession linked to the gene."""
+    """gene -> nuccore/protein: the gene report's transcripts/proteins
+    arrays list every linked accession.
+
+    JSON path confirmed against a real answer from an NCBI Datasets team
+    member (biostars.org/p/478064): .genes[].gene.transcripts[].accession_version,
+    .transcripts[].protein.accession_version, and .genes[].gene.proteins[]
+    .accession_version for entries with no transcript record (e.g. some
+    mitochondrial genes)."""
     tags = extract_field_tags(req.term or "")
     gene_id = req.ids or tags.get("uid")
     symbol = tags.get("gene") or tags.get("sym")
@@ -207,18 +213,25 @@ def _link_gene_to_seq(req: ParsedRequest) -> TranslationResult:
             eutils_reference=rebuild_eutils_url(req),
         )
     locator = f"gene-id {gene_id}" if gene_id else f"symbol {symbol}"
-    cli = (f"datasets summary gene {locator} --report product --as-json-lines | "
-           f"dataformat tsv gene-product --fields symbol,gene-id,"
-           f"transcript-accession,transcript-protein-accession")
+    jq_filter = (
+        r".genes[].gene | [.gene_id, .symbol, "
+        r"(try .transcripts[].accession_version), "
+        r"(try .transcripts[].protein.accession_version), "
+        r"(try .proteins[].accession_version)] | @tsv"
+    )
+    cli = f"datasets summary gene {locator} --as-json-lines | jq -r '{jq_filter}'"
     rest = f"{DATASETS_REST_BASE}/gene/{'id' if gene_id else 'symbol'}/{quote(str(gene_id or symbol))}"
     return TranslationResult(
         True,
-        "The gene product report lists every linked transcript/protein "
-        "accession - pull them out with dataformat instead of elink+efetch.",
+        "The gene report's transcripts/proteins arrays list every linked "
+        "nucleotide/protein accession - pull them out with jq instead of "
+        "elink+efetch.",
         datasets_cli=cli,
         datasets_rest=rest,
-        field_hint="REST response's product/transcript records include the "
-                    "linked nucleotide + protein accessions directly.",
+        field_hint="transcripts[].accession_version (nucleotide), "
+                    "transcripts[].protein.accession_version, and "
+                    "proteins[].accession_version (for entries with no "
+                    "transcript record).",
     )
 
 
@@ -252,14 +265,25 @@ def _link_assembly_to_field(cli_field: str, rest_note: str):
 
 
 def _link_assembly_to_seq(req: ParsedRequest) -> TranslationResult:
-    """assembly -> nuccore: the genome *sequence* report enumerates every
-    chromosome/scaffold/contig accession that makes up the assembly."""
+    """assembly -> nuccore. Two real intents show up in practice
+    (biostars.org/p/9544394): wanting just the component accessions (use
+    the sequence report), or wanting the actual sequence data (just
+    download the genome - the sequence report alone doesn't include FASTA)."""
     accession = req.ids
     if not accession:
         return TranslationResult(
             False,
-            "Need an assembly accession to list its component sequences.",
+            "Need an assembly accession to look up its component sequences.",
             eutils_reference=rebuild_eutils_url(req),
+        )
+    if _wants_download(req):
+        return TranslationResult(
+            True,
+            "You want actual sequence data, not just accessions - download "
+            "the genome directly rather than looking up nuccore records one "
+            "by one.",
+            datasets_cli=f"datasets download genome accession {accession}",
+            datasets_rest=f"{DATASETS_REST_BASE}/genome/accession/{quote(accession)}/download",
         )
     cli = (f"datasets summary genome accession {accession} --report sequence "
            f"--as-json-lines | dataformat tsv genome-seq --fields accession,refseq-seq-acc")
@@ -269,7 +293,9 @@ def _link_assembly_to_seq(req: ParsedRequest) -> TranslationResult:
         "the assembly - this is the assembly->nuccore link, structurally.",
         datasets_cli=cli,
         datasets_rest=f"{DATASETS_REST_BASE}/genome/accession/{quote(accession)}/sequence_reports",
-        field_hint="Each entry is one chromosome/scaffold/contig accession.",
+        field_hint="Each entry is one chromosome/scaffold/contig accession. "
+                    "If you actually want the FASTA data, not just IDs, use "
+                    "'datasets download genome accession' instead.",
     )
 
 
