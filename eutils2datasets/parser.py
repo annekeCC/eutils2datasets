@@ -122,8 +122,11 @@ def parse(input_text: str) -> ParsedRequest:
 # --- helpers for pulling EUtils field-tagged terms out of a query string ---
 
 # A single ANDed clause like `Homo sapiens[orgn]` or `"BRCA1"[gene]` - the
-# whole clause up to the trailing [tag], quotes optional either way.
-CLAUSE_TAG_RE = re.compile(r'^\s*"?(.*?)"?\s*\[(\w+)\]\s*$')
+# whole clause up to the trailing [tag], quotes optional either way. Real
+# Entrez field tags aren't always single words - db=assembly uses
+# `[Assembly Level]` and `[RefSeq Category]` - so the tag itself may
+# contain spaces too.
+CLAUSE_TAG_RE = re.compile(r'^\s*"?(.*?)"?\s*\[([\w ]+)\]\s*$')
 AND_SPLIT_RE = re.compile(r'\bAND\b', re.IGNORECASE)
 
 
@@ -134,14 +137,19 @@ def extract_field_tags(term: str) -> dict:
     reads each clause's full value up to its trailing [tag], so multi-word
     values without inner quoting are captured correctly. Clauses without a
     recognizable [tag] are silently skipped (caller checks for completeness,
-    not exhaustiveness)."""
+    not exhaustiveness).
+
+    Multi-word tags (e.g. `[Assembly Level]`, `[RefSeq Category]`) are
+    normalized by lowercasing and stripping internal spaces, so callers look
+    them up as 'assemblylevel', 'refseqcategory', etc."""
     if not term:
         return {}
     tags = {}
     for clause in AND_SPLIT_RE.split(term):
         match = CLAUSE_TAG_RE.match(clause.strip())
         if match:
-            value, field_name = match.group(1).strip(), match.group(2).lower()
+            value = match.group(1).strip()
+            field_name = re.sub(r'\s+', '', match.group(2).strip().lower())
             tags[field_name] = value
     return tags
 

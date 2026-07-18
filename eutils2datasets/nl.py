@@ -10,10 +10,17 @@ mode can't give a different (and possibly wrong) answer than the
 EUtils-call mode would for the equivalent request.
 
 Because it's heuristic, coverage is intentionally narrow: gene lookups,
-genome/assembly lookups, taxonomy lookups, and the same handful of
-elink-style relationships from translator.ELINK_MAP. Anything else
-returns a clear "couldn't confidently parse this" result rather than a
-guess dressed up as confidence.
+genome/assembly lookups, taxonomy lookups, the elink-style relationships
+from translator.ELINK_MAP, ortholog-set questions, and WP_ accession
+flanking-sequence questions. Anything else returns a clear "couldn't
+confidently parse this" result rather than a guess dressed up as
+confidence.
+
+Orthologs and flanking sequence are handled specially: unlike every other
+pattern here, there's no real EUtils/EDirect syntax to fall back to for
+them (the legacy ortholog elink is dead, and EDirect has no flanking-
+sequence concept at all), so these two are --ask-only - see
+translator._link_gene_ortholog and translator._link_seq_to_gene.
 """
 import re
 
@@ -23,9 +30,14 @@ from .translator import translate as translate_request
 ACCESSION_RE = re.compile(
     r'\b(GCF_\d+\.\d+|GCA_\d+\.\d+|[NX][MRPCGTW]_\d+(?:\.\d+)?)\b', re.IGNORECASE
 )
+WP_ACCESSION_RE = re.compile(r'\bWP_\d+(?:\.\d+)?\b', re.IGNORECASE)
 TAXID_CONTEXT_RE = re.compile(r'\btax(?:onomy)?[\s_-]*id\s*(\d+)\b', re.IGNORECASE)
 GENE_ID_CONTEXT_RE = re.compile(r'\bgene\s*id\s*(\d+)\b', re.IGNORECASE)
 BARE_GENE_SYMBOL_RE = re.compile(r'\b([A-Z][A-Z0-9]{1,9})\b')
+ORTHOLOG_RE = re.compile(r'\bortholog', re.IGNORECASE)
+ORTHOLOG_TAXA_RE = re.compile(r'\b(?:in|across|among)\s+([a-zA-Z][\w \-]*?)\s*[.?!]*$', re.IGNORECASE)
+FLANK_RE = re.compile(r'\bflank', re.IGNORECASE)
+FLANK_BP_RE = re.compile(r'(\d+)\s*(?:bp|base\s*pairs?)\b', re.IGNORECASE)
 
 # Common names -> the form Datasets/EUtils organism lookups expect. Not
 # exhaustive - anything not here just gets passed through as typed, which
@@ -89,6 +101,49 @@ def interpret(question: str) -> TranslationResult:
     gene_id_match = GENE_ID_CONTEXT_RE.search(question)
     organism = _find_organism(question)
     symbol = _find_gene_symbol(question) if not accession_match else None
+
+    # 0a. Flanking-sequence questions ("100 bp flanking sequence for
+    # WP_003249567.1") - checked first since "flank" is an unambiguous
+    # signal not shared with any other pattern here.
+    if FLANK_RE.search(question):
+        wp_match = WP_ACCESSION_RE.search(question)
+        bp_match = FLANK_BP_RE.search(question)
+        if wp_match and bp_match:
+            req = ParsedRequest(
+                tool="elink", db="protein",
+                extra={"target": "gene", "flank_bp": bp_match.group(1)},
+                ids=wp_match.group(0).upper(),
+                raw=question,
+            )
+            return translate_request(req)
+        return TranslationResult(
+            False,
+            "This sounds like a flanking-sequence request, but I need both a "
+            "WP_ protein accession and a bp length to build it - e.g. '100 bp "
+            "flanking sequence for WP_003249567.1'.",
+        )
+
+    # 0b. Ortholog-set questions ("orthologs of BRCA1 in mammals") - also
+    # checked before the generic link/db intents below, since these mention
+    # "gene" but need the dedicated ortholog handler, not a plain gene lookup.
+    if ORTHOLOG_RE.search(question):
+        taxa_match = ORTHOLOG_TAXA_RE.search(question)
+        taxa = taxa_match.group(1).strip() if taxa_match else "all"
+        extra = {"target": "gene", "name": "gene_gene_homolog", "ortholog_taxa": taxa}
+        if gene_id_match:
+            req = ParsedRequest(tool="elink", db="gene", extra=extra,
+                                 ids=gene_id_match.group(1), raw=question)
+            return translate_request(req)
+        if symbol:
+            req = ParsedRequest(tool="elink", db="gene", extra=extra,
+                                 term=f"{symbol}[gene]", raw=question)
+            return translate_request(req)
+        return TranslationResult(
+            False,
+            "This sounds like an ortholog question, but I couldn't find a "
+            "gene symbol or Gene ID in it - try including one, e.g. "
+            "'orthologs of BRCA1 in mammals'.",
+        )
 
     # 1. Check elink-style ("X for/from Y") relationship phrasing first.
     for pattern, (source_db, target_db) in LINK_INTENTS:
