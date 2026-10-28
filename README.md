@@ -2,6 +2,8 @@
 
 Explains the [NCBI Datasets API v2](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/) equivalent of an EUtils/EDirect request, or of a plain-language question about NCBI data — where an equivalent exists. **This is a translation/explanation tool only: it never calls, forwards, or executes any request.** Its output is something you copy and run yourself.
 
+This project was developed using Claude Code.
+
 ## Why this can't be a full translator
 
 [EUtils](https://www.ncbi.nlm.nih.gov/books/NBK25501/) / [EDirect](https://www.ncbi.nlm.nih.gov/books/NBK179288/) cover the entire Entrez ecosystem: PubMed, Nucleotide, Protein, SRA, BioProject, arbitrary free-text boolean search, cross-database linking (`elink`), and more. **NCBI Datasets API v2 is much narrower** — it's built around structured lookups for **genes, genome assemblies, and taxonomy** (plus virus data, not yet handled here), returning JSON reports or downloadable zip packages, not general Entrez search results.
